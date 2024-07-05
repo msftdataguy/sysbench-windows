@@ -183,6 +183,13 @@ function create_table(drv, con, table_num)
       else
         id_def = "SERIAL"
       end
+   elseif drv:name() == "mssql"
+   then
+      if not sysbench.opt.auto_inc then
+         id_def = "INTEGER NOT NULL"
+      else
+        id_def = "INTEGER IDENTITY(1,1)"
+      end
    else
       error("Unsupported database driver:" .. drv:name())
    end
@@ -279,11 +286,19 @@ local stmt_defs = {
 }
 
 function prepare_begin()
-   stmt.begin = con:prepare("BEGIN")
+    if drv:name() == "mssql"
+        stmt.begin = con:prepare("BEGIN TRANSACTION")
+    else
+        stmt.begin = con:prepare("BEGIN")
+    end
 end
 
 function prepare_commit()
-   stmt.commit = con:prepare("COMMIT")
+    if drv:name() == "mssql"
+        stmt.begin = con:prepare("COMMIT TRANSACTION")
+    else
+        stmt.begin = con:prepare("COMMIT")
+    end
 end
 
 function prepare_for_each_table(key)

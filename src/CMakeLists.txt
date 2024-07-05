@@ -142,6 +142,21 @@ if(WITH_PGSQL)
   target_link_libraries(sysbench PRIVATE PostgreSQL::PostgreSQL)
 endif()
 
+if(WIN32)
+    # Microsoft SQL Server driver
+    set(WITH_MSSSQL
+        ON
+        CACHE BOOL "Whether to use Microsoft SQL Server driver.")
+    if(WITH_MSSSQL)
+      # workaround CMake issue # 17223 (non-essential header lookup)
+      set(MSSSQL_TYPE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+      find_package(ODBC REQUIRED)
+      target_sources(sysbench PRIVATE drivers/mssql/drv_mssql.c)
+      target_compile_definitions(sysbench PRIVATE -DUSE_MSSQL)
+      target_link_libraries(sysbench PRIVATE ${ODBC_LIBRARIES})
+    endif()
+endif()
+
 set(WITH_SYSTEM_CONCURRENCY_KIT
     OFF
     CACHE BOOL "Use concurrency kit library provided by system")
@@ -199,6 +214,9 @@ if(NOT WIN32)
   if(WITH_PGSQL)
     set(USE_MYSQL 1)
   endif()
+  if(WITH_MSSQL)
+    set(USE_MSSSQL 1)
+  endif()
 
   configure_file(${PROJECT_SOURCE_DIR}/tests/include/config.sh.in
                  ${PROJECT_BINARY_DIR}/tests/include/config.sh @ONLY)
@@ -247,6 +265,7 @@ if(WIN32)
     $<$<BOOL:${mysqlclientlib}>:$<TARGET_FILE_DIR:${mysqlclientlib}>>
     ${PostgreSQL_LIBRARY_DIRS}
     $<$<BOOL:${PostgreSQL_LIBRARY_DIR}>:${PostgreSQL_LIBRARY_DIR}/../bin>
+    $<$<BOOL:${MSSSQL_TYPE_INCLUDE_DIR}>:${MSSSQL_TYPE_INCLUDE_DIR}/../bin>
     $<$<TARGET_EXISTS:ZLIB::ZLIB>:$<TARGET_FILE_DIR:ZLIB::ZLIB>/../bin>
     ${compiler_dir}
   )

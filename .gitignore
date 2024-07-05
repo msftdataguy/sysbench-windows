@@ -91,3 +91,5 @@ stage
 *.bak
 src/libmariadb-src
 *.pdb
+/out
+/.vs

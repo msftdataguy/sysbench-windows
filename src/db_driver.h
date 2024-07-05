@@ -341,4 +341,8 @@ int register_driver_mysql(sb_list_t *);
 int register_driver_pgsql(sb_list_t *);
 #endif
 
+#ifdef USE_MSSQL
+int register_driver_mssql(sb_list_t*);
+#endif
+
 #endif /* DB_DRIVER_H */
