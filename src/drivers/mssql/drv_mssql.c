@@ -46,7 +46,7 @@
 
 #define DEBUG(format, ...)                      \
   do {                                          \
-	if (SB_UNLIKELY(g_Arguments.IsDebug != 0))           \
+	if (SB_UNLIKELY(global_arguments.is_debug != 0))           \
 	  log_text(LOG_DEBUG, format, __VA_ARGS__); \
   } while (0)
 
@@ -93,65 +93,65 @@ typedef enum
 
 typedef struct
 {
-	sb_list_t* HostsList;
-	sb_list_t* Ports;
-	const char* DatabaseName;
-	unsigned char UsingTrustedAuth;
-	unsigned char IsDebug;
-	sb_list_t* IgnoredErrorsList;
-	unsigned int IsDryRun;
-	unsigned int NetworkPacketSize;
-	unsigned int LoginTimeout;
+	sb_list_t* hosts_list;
+	sb_list_t* ports;
+	const char* database_name;
+	unsigned char use_trusted_authentication;
+	unsigned char is_debug;
+	sb_list_t* ignored_errors_list;
+	unsigned int is_dry_run;
+	unsigned int network_packet_size;
+	unsigned int login_timeout;
 } mssql_drv_args_t;
 
 typedef struct
 {
-	SQLHDBC ConnectionHdl;
-	const char* HostName;
-	const char* DatabaseName;
-	unsigned int Port;
-	bool IsNamedInstance;
-	const char* InstanceName;
+	SQLHDBC connection_hdl;
+	const char* host_name;
+	const char* database_name;
+	unsigned int port;
+	bool is_named_instance;
+	const char* instance_name;
 } mssql_connection_t;
 
-static mssql_connection_t* SqlConnectionAlloc()
+static mssql_connection_t* mssql_connection_alloc()
 {
 	mssql_connection_t* pconnection = malloc(sizeof(mssql_connection_t));
 
-	pconnection->ConnectionHdl = SQL_NULL_HANDLE;
-	pconnection->HostName = NULL;
-	pconnection->DatabaseName = NULL;
-	pconnection->Port = 0;
-	pconnection->IsNamedInstance = false;
-	pconnection->InstanceName = NULL;
+	pconnection->connection_hdl = SQL_NULL_HANDLE;
+	pconnection->host_name = NULL;
+	pconnection->database_name = NULL;
+	pconnection->port = 0;
+	pconnection->is_named_instance = false;
+	pconnection->instance_name = NULL;
 
 	return pconnection;
 }
 
 typedef struct
 {
-	SQLSMALLINT InputOutputType;
-	SQLSMALLINT ValueType;
-	SQLSMALLINT ParameterType;
-	int ColumnLength;
+	SQLSMALLINT input_output_type;
+	SQLSMALLINT value_type;
+	SQLSMALLINT parameter_type;
+	int column_length;
 } mssql_parameter_t;
 
 typedef struct
 {
-	SQLHSTMT StatementHdl;
-	char* StatementName;
-	int IsPrepared;
-	int CountOfParameters;
-	mssql_parameter_t* ParameterTypes;
-	char** ParameterValues;
+	SQLHSTMT statement_hdl;
+	char* statement_name;
+	int is_prepared;
+	int count_of_parameters;
+	mssql_parameter_t* parameter_types;
+	char** parameter_values;
 } mssql_statement_t;
 
 typedef struct
 {
-	db_bind_type_t DbType;
-	SQLSMALLINT ValueType;
-	SQLSMALLINT ParameterType;
-	int Size;
+	db_bind_type_t db_type;
+	SQLSMALLINT value_type;
+	SQLSMALLINT parameter_type;
+	int size;
 } db_mssql_bind_map_t;
 
 /* DB-to-MSSQL bind types map */
@@ -171,10 +171,10 @@ db_mssql_bind_map_t db_mssql_bind_map[] =
 };
 
 /* driver args */
-static mssql_drv_args_t g_Arguments;
+static mssql_drv_args_t global_arguments;
 
 /* whether server-side prepared statemens should be used */
-static char g_UsePreparedStatements;
+static char global_use_prepared_statements;
 
 /* Positions in the list of hosts/ports/sockets. Protected by pos_mutex */
 static sb_list_item_t* hosts_pos;
@@ -183,24 +183,24 @@ static sb_list_item_t* sockets_pos;
 static pthread_mutex_t pos_mutex;
 
 /* ODBC environment handle */
-HENV EnvironmentHdl;
+HENV global_environment_hdl;
 
 /* MSSQL driver operations */
-static int SqlDriverInit(void);
-static int SqlThreadInit(int);
-static int SqlDriverDescribe(drv_caps_t*);
-static int SqlDriverConnect(db_conn_t*);
-static int SqlDriverDisconnect(db_conn_t*);
-static int SqlDriverPrepare(db_stmt_t*, const char*, size_t);
-static int SqlDriverBindParameter(db_stmt_t*, db_bind_t*, size_t);
-static int SqlDriverBindResult(db_stmt_t*, db_bind_t*, size_t);
-static db_error_t SqlDriverExecute(db_stmt_t*, db_result_t*);
-static int SqlDriverFetch(db_result_t*);
-static int SqlDriverFetchRow(db_result_t*, db_row_t*);
-static db_error_t SqlDriverExecuteQuery(db_conn_t*, const char*, size_t, db_result_t*);
-static int SqlDriverFreeResults(db_result_t*);
-static int SqlDriverClose(db_stmt_t*);
-static int SqlDriverFinished(void);
+static int mssql_driver_init(void);
+static int mssql_driver_on_thread_init(int);
+static int mssql_driver_describe(drv_caps_t*);
+static int mssql_driver_connect(db_conn_t*);
+static int mssql_driver_disconnect(db_conn_t*);
+static int mssql_driver_prepare(db_stmt_t*, const char*, size_t);
+static int mssql_driver_parameter_bind(db_stmt_t*, db_bind_t*, size_t);
+static int mssql_driver_bind_result(db_stmt_t*, db_bind_t*, size_t);
+static db_error_t mssql_driver_execute(db_stmt_t*, db_result_t*);
+static int mssql_driver_fetch(db_result_t*);
+static int mssql_driver_fetch_row(db_result_t*, db_row_t*);
+static db_error_t mssql_driver_query_exec(db_conn_t*, const char*, size_t, db_result_t*);
+static int mssql_driver_results_free(db_result_t*);
+static int mssql_driver_close(db_stmt_t*);
+static int mssql_driver_finished(void);
 
 /* MSSQL driver definition */
 static db_driver_t mssql_driver =
@@ -209,21 +209,21 @@ static db_driver_t mssql_driver =
 	.lname = "Microsoft SQL Server driver",
 	.args = mssql_drv_args,
 	.ops = {
-		.init = SqlDriverInit,
-		.thread_init = SqlThreadInit,
-		.describe = SqlDriverDescribe,
-		.connect = SqlDriverConnect,
-		.disconnect = SqlDriverDisconnect,
-		.prepare = SqlDriverPrepare,
-		.bind_param = SqlDriverBindParameter,
-		.bind_result = SqlDriverBindResult,
-		.execute = SqlDriverExecute,
-		.fetch = SqlDriverFetch,
-		.fetch_row = SqlDriverFetchRow,
-		.free_results = SqlDriverFreeResults,
-		.close = SqlDriverClose,
-		.query = SqlDriverExecuteQuery,
-		.done = SqlDriverFinished
+		.init = mssql_driver_init,
+		.thread_init = mssql_driver_on_thread_init,
+		.describe = mssql_driver_describe,
+		.connect = mssql_driver_connect,
+		.disconnect = mssql_driver_disconnect,
+		.prepare = mssql_driver_prepare,
+		.bind_param = mssql_driver_parameter_bind,
+		.bind_result = mssql_driver_bind_result,
+		.execute = mssql_driver_execute,
+		.fetch = mssql_driver_fetch,
+		.fetch_row = mssql_driver_fetch_row,
+		.free_results = mssql_driver_results_free,
+		.close = mssql_driver_close,
+		.query = mssql_driver_query_exec,
+		.done = mssql_driver_finished
 	}
 };
 /* ODBC error handler */
@@ -283,10 +283,10 @@ static db_error_t get_odbc_error(db_conn_t* pconn, db_stmt_t* sb_stmt, const cha
 	SQLSMALLINT messageLength;
 
 	mssql_statement_t* db_mssql_stmt = (mssql_statement_t*)sb_stmt->ptr;
-	HSTMT* hstmt = db_mssql_stmt->StatementHdl;
+	HSTMT* hstmt = db_mssql_stmt->statement_hdl;
 
 	SQLRETURN ret = SQLGetDiagRec(SQL_HANDLE_STMT,
-								  db_mssql_stmt->StatementHdl,
+								  db_mssql_stmt->statement_hdl,
 								  ++error,
 								  (SQLCHAR*)&state,
 								  &nativeError,
@@ -316,7 +316,7 @@ static db_error_t get_odbc_error(db_conn_t* pconn, db_stmt_t* sb_stmt, const cha
 
 		/* Check if the error code is specified in --mysql-ignore-errors, and return
 		   DB_ERROR_IGNORABLE if so, or DB_ERROR_FATAL otherwise */
-		SB_LIST_FOR_EACH(pos, g_Arguments.IgnoredErrorsList)
+		SB_LIST_FOR_EACH(pos, global_arguments.ignored_errors_list)
 		{
 			const char* val = SB_LIST_ENTRY(pos, value_t, listitem)->data;
 
@@ -371,72 +371,72 @@ int register_driver_mssql(sb_list_t* drivers)
 // Returns:
 //	int
 //
-int SqlDriverInit(void)
+int mssql_driver_init(void)
 {
 	pthread_mutex_init(&pos_mutex, NULL);
 
-	g_Arguments.HostsList = sb_get_value_list("mssql-host");
-	if (SB_LIST_IS_EMPTY(g_Arguments.HostsList))
+	global_arguments.hosts_list = sb_get_value_list("mssql-host");
+	if (SB_LIST_IS_EMPTY(global_arguments.hosts_list))
 	{
 		log_text(LOG_FATAL, "No MSSQL hosts specified, aborting");
 		return 1;
 	}
-	hosts_pos = SB_LIST_ITEM_NEXT(g_Arguments.HostsList);
+	hosts_pos = SB_LIST_ITEM_NEXT(global_arguments.hosts_list);
 
-	g_Arguments.Ports = sb_get_value_list("mssql-port");
-	if (SB_LIST_IS_EMPTY(g_Arguments.Ports))
+	global_arguments.ports = sb_get_value_list("mssql-port");
+	if (SB_LIST_IS_EMPTY(global_arguments.ports))
 	{
 		log_text(LOG_FATAL, "No MSSQL ports specified, aborting");
 		return 1;
 	}
-	ports_pos = SB_LIST_ITEM_NEXT(g_Arguments.Ports);
+	ports_pos = SB_LIST_ITEM_NEXT(global_arguments.ports);
 
-	g_Arguments.IsDebug = sb_get_value_flag("mssql-debug");
-	if (g_Arguments.IsDebug)
+	global_arguments.is_debug = sb_get_value_flag("mssql-debug");
+	if (global_arguments.is_debug)
 	{
 		sb_globals.verbosity = LOG_DEBUG;
 	}
 
-	g_Arguments.DatabaseName = sb_get_value_string("mssql-db");
-	g_Arguments.UsingTrustedAuth = true;
-	g_Arguments.IgnoredErrorsList = sb_get_value_list("mssql-ignore-errors");
-	g_Arguments.IsDryRun = sb_get_value_flag("mssql-dry-run");
-	g_Arguments.NetworkPacketSize = x_DefaultNetworkPacketSize;
-	g_Arguments.LoginTimeout = x_DefaultLoginTimeout;
+	global_arguments.database_name = sb_get_value_string("mssql-db");
+	global_arguments.use_trusted_authentication = true;
+	global_arguments.ignored_errors_list = sb_get_value_list("mssql-ignore-errors");
+	global_arguments.is_dry_run = sb_get_value_flag("mssql-dry-run");
+	global_arguments.network_packet_size = x_DefaultNetworkPacketSize;
+	global_arguments.login_timeout = x_DefaultLoginTimeout;
 	if (SQLSetEnvAttr(NULL,
 					  SQL_ATTR_CONNECTION_POOLING,
 					  (SQLPOINTER)SQL_CP_ONE_PER_DRIVER,
 					  SQL_IS_INTEGER) != SQL_SUCCESS)
 	{
-		get_odbc_error_info(SQL_HANDLE_ENV, EnvironmentHdl, "SQLSetEnvAttr");
+		get_odbc_error_info(SQL_HANDLE_ENV, global_environment_hdl, "SQLSetEnvAttr");
 	}
 
 	if (SQLAllocHandle(SQL_HANDLE_ENV,
 					   SQL_NULL_HANDLE,
-					   &EnvironmentHdl) != SQL_SUCCESS)
+					   &global_environment_hdl) != SQL_SUCCESS)
 	{
-		get_odbc_error_info(SQL_HANDLE_ENV, EnvironmentHdl, "SQLAllocHandle");
+		get_odbc_error_info(SQL_HANDLE_ENV, global_environment_hdl, "SQLAllocHandle");
 	}
 
-	if (SQLSetEnvAttr(EnvironmentHdl,
+	if (SQLSetEnvAttr(global_environment_hdl,
 					  SQL_ATTR_ODBC_VERSION,
 					  (SQLPOINTER)SQL_OV_ODBC3,
 					  SQL_IS_INTEGER) != SQL_SUCCESS)
 	{
-		get_odbc_error_info(SQL_HANDLE_ENV, EnvironmentHdl, "SQLSetEnvAttr");
+		get_odbc_error_info(SQL_HANDLE_ENV, global_environment_hdl, "SQLSetEnvAttr");
 	}
 	if (SQLSetEnvAttr(NULL,
 					  SQL_ATTR_CP_MATCH,
 					  (SQLPOINTER)SQL_CP_STRICT_MATCH,
 					  SQL_IS_INTEGER) != SQL_SUCCESS)
 	{
-		get_odbc_error_info(SQL_HANDLE_ENV, EnvironmentHdl, "SQLSetEnvAttr");
+		get_odbc_error_info(SQL_HANDLE_ENV, global_environment_hdl, "SQLSetEnvAttr");
 	}
 
 	return 0;
 }
 
-int SqlThreadInit(int thread_id)
+int mssql_driver_on_thread_init(int thread_id)
 {
 	return 0;
 }
@@ -451,7 +451,7 @@ static drv_caps_t mssql_driver_capabilities =
 	1
 };
 
-int SqlDriverDescribe(drv_caps_t* caps)
+int mssql_driver_describe(drv_caps_t* caps)
 {
 	(*caps) = mssql_driver_capabilities;
 	return 0;
@@ -469,29 +469,29 @@ int SqlDriverDescribe(drv_caps_t* caps)
 // Returns:
 //	bool
 //
-static int SqlDoConnect(mssql_connection_t* db_connection)
+static int mssql_connect(mssql_connection_t* db_connection)
 {
-	if (SQLAllocHandle(SQL_HANDLE_DBC, EnvironmentHdl, &db_connection->ConnectionHdl) != SQL_SUCCESS)
+	if (SQLAllocHandle(SQL_HANDLE_DBC, global_environment_hdl, &db_connection->connection_hdl) != SQL_SUCCESS)
 	{
-		return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->ConnectionHdl, "SQLAllocHandle");
+		return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->connection_hdl, "SQLAllocHandle");
 	}
 
-	SQLUINTEGER loginTimeout = g_Arguments.LoginTimeout;
-	if (SQLSetConnectAttr(db_connection->ConnectionHdl,
+	SQLUINTEGER loginTimeout = global_arguments.login_timeout;
+	if (SQLSetConnectAttr(db_connection->connection_hdl,
 						  SQL_ATTR_LOGIN_TIMEOUT,
 						  (SQLPOINTER)loginTimeout,
 						  SQL_IS_INTEGER) != SQL_SUCCESS)
 	{
-		return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->ConnectionHdl, "SQLSetConnectAttr");
+		return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->connection_hdl, "SQLSetConnectAttr");
 	}
 
-	SQLUINTEGER packetSize = g_Arguments.NetworkPacketSize;
-	if (SQLSetConnectAttr(db_connection->ConnectionHdl,
+	SQLUINTEGER packetSize = global_arguments.network_packet_size;
+	if (SQLSetConnectAttr(db_connection->connection_hdl,
 						  SQL_ATTR_PACKET_SIZE,
 						  (SQLPOINTER)packetSize,
 						  SQL_IS_INTEGER) != SQL_SUCCESS)
 	{
-		return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->ConnectionHdl, "SQLSetConnectAttr");
+		return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->connection_hdl, "SQLSetConnectAttr");
 	}
 
 	char szConnectStr[1024] = { '\0' };
@@ -502,31 +502,31 @@ static int SqlDoConnect(mssql_connection_t* db_connection)
 	ULONG retryCount = 0;
 	const char* pwszNetwork = NULL;
 
-	if (db_connection->IsNamedInstance)
+	if (db_connection->is_named_instance)
 	{
 		sprintf_s(szServerNameFormat,
 				  ARRAYSIZE(szServerNameFormat),
 				  x_ServerNameFormatRaw,
-				  db_connection->HostName);
+				  db_connection->host_name);
 	}
 	else
 	{
 		pwszNetwork = x_TcpIpNetwork;
 
-		if (db_connection->IsNamedInstance)
+		if (db_connection->is_named_instance)
 		{
 			sprintf_s(szServerNameFormat,
 					  ARRAYSIZE(szServerNameFormat),
 					  x_TcpServerNameFormatNI,
-					  db_connection->InstanceName);
+					  db_connection->instance_name);
 		}
 		else
 		{
 			sprintf_s(szServerNameFormat,
 					  ARRAYSIZE(szServerNameFormat),
 					  x_TcpServerNameFormat,
-					  db_connection->HostName,
-					  db_connection->Port);
+					  db_connection->host_name,
+					  db_connection->port);
 		}
 	}
 
@@ -534,12 +534,12 @@ static int SqlDoConnect(mssql_connection_t* db_connection)
 			  ARRAYSIZE(szConnectStr),
 			  x_ConnectionStringFormat,
 			  szServerNameFormat,
-			  db_connection->DatabaseName,
+			  db_connection->database_name,
 			  szAuthFormat);
 
 	DEBUG("Connection:  %s", szConnectStr);
 	SQLRETURN ret = SQLDriverConnect(
-		db_connection->ConnectionHdl,
+		db_connection->connection_hdl,
 		NULL,
 		szConnectStr,
 		ARRAYSIZE(szConnectStr),
@@ -550,7 +550,7 @@ static int SqlDoConnect(mssql_connection_t* db_connection)
 
 	if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO)
 	{
-		return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->ConnectionHdl, "SQLDriverConnect");
+		return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->connection_hdl, "SQLDriverConnect");
 	}
 
 	return 0;
@@ -569,32 +569,32 @@ static int SqlDoConnect(mssql_connection_t* db_connection)
 // Returns:
 //	int
 //
-int SqlDriverConnect(db_conn_t* sb_conn)
+int mssql_driver_connect(db_conn_t* sb_conn)
 {
 	mssql_connection_t* db_connection = NULL;
 
-	if (g_Arguments.IsDryRun)
+	if (global_arguments.is_dry_run)
 		return 0;
 
-	db_connection = SqlConnectionAlloc();
+	db_connection = mssql_connection_alloc();
 	if (db_connection == NULL)
 		return 1;
 
-	db_connection->DatabaseName = g_Arguments.DatabaseName;
+	db_connection->database_name = global_arguments.database_name;
 	
 	pthread_mutex_lock(&pos_mutex);
 
-	db_connection->HostName = SB_LIST_ENTRY(hosts_pos, value_t, listitem)->data;
-	db_connection->Port = atoi(SB_LIST_ENTRY(ports_pos, value_t, listitem)->data);
+	db_connection->host_name = SB_LIST_ENTRY(hosts_pos, value_t, listitem)->data;
+	db_connection->port = atoi(SB_LIST_ENTRY(ports_pos, value_t, listitem)->data);
 
 	/*
 	  Pick the next port in args.ports. If there are no more ports in the list,
 	  move to the next available host and get the first port again.
    */
 	ports_pos = SB_LIST_ITEM_NEXT(ports_pos);
-	if (ports_pos == g_Arguments.Ports) {
+	if (ports_pos == global_arguments.ports) {
 		hosts_pos = SB_LIST_ITEM_NEXT(hosts_pos);
-		if (hosts_pos == g_Arguments.HostsList)
+		if (hosts_pos == global_arguments.hosts_list)
 			hosts_pos = SB_LIST_ITEM_NEXT(hosts_pos);
 
 		ports_pos = SB_LIST_ITEM_NEXT(ports_pos);
@@ -602,12 +602,12 @@ int SqlDriverConnect(db_conn_t* sb_conn)
 	pthread_mutex_unlock(&pos_mutex);
 
 	
-	if (ERROR_SUCCESS != SqlDoConnect(db_connection))
+	if (ERROR_SUCCESS != mssql_connect(db_connection))
 	{
 		log_text(LOG_FATAL,
 				 "unable to connect to MSSQL server on host '%s', port %u, aborting...",
-				 db_connection->HostName,
-				 db_connection->Port);
+				 db_connection->host_name,
+				 db_connection->port);
 
 		free(db_connection);
 		return 1;
@@ -619,22 +619,22 @@ int SqlDriverConnect(db_conn_t* sb_conn)
 	return 0;
 }
 
-int SqlDriverDisconnect(db_conn_t* sb_conn)
+int mssql_driver_disconnect(db_conn_t* sb_conn)
 {
 	mssql_connection_t* db_connection = sb_conn->ptr;
 
-	if (g_Arguments.IsDryRun)
+	if (global_arguments.is_dry_run)
 	{
 		return 0;
 	}
 
-	if (db_connection != NULL && db_connection->ConnectionHdl != NULL)
+	if (db_connection != NULL && db_connection->connection_hdl != NULL)
 	{
-		DEBUG("SQLDisconnect(%p)", db_connection->ConnectionHdl);
-		if (SQLDisconnect(db_connection->ConnectionHdl))
+		DEBUG("SQLDisconnect(%p)", db_connection->connection_hdl);
+		if (SQLDisconnect(db_connection->connection_hdl))
 		{
-			DEBUG("SQLFreeHandle(%p)", db_connection->ConnectionHdl);
-			SQLFreeHandle(SQL_HANDLE_DBC, db_connection->ConnectionHdl);
+			DEBUG("SQLFreeHandle(%p)", db_connection->connection_hdl);
+			SQLFreeHandle(SQL_HANDLE_DBC, db_connection->connection_hdl);
 		}
 
 		free(db_connection);
@@ -651,41 +651,41 @@ int get_unique_stmt_name(char* name, int len)
 					(int)sb_rand_uniform_uint64());
 }
 
-int SqlDriverPrepare(db_stmt_t* stmt, const char* query, size_t len)
+int mssql_driver_prepare(db_stmt_t* stmt, const char* query, size_t len)
 {
 	char name[32];
 
-	if (g_Arguments.IsDryRun)
+	if (global_arguments.is_dry_run)
 	{
 		return 0;
 	}
 
 	mssql_connection_t* db_connection = (mssql_connection_t*)stmt->connection->ptr;
-	if (db_connection == NULL || db_connection->ConnectionHdl == SQL_NULL_HANDLE)
+	if (db_connection == NULL || db_connection->connection_hdl == SQL_NULL_HANDLE)
 	{
 		return 1;
 	}
 
-	if (g_UsePreparedStatements)
+	if (global_use_prepared_statements)
 	{
 		mssql_statement_t* db_stmt = malloc(sizeof(mssql_statement_t));
 
-		SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, db_connection->ConnectionHdl, &db_stmt->StatementHdl);
+		SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, db_connection->connection_hdl, &db_stmt->statement_hdl);
 		if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO)
 		{
-			return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->ConnectionHdl, "SQLAllocHandle");
+			return get_odbc_error_info(SQL_HANDLE_DBC, db_connection->connection_hdl, "SQLAllocHandle");
 		}
 
 		stmt->ptr = db_stmt;
 
 		DEBUG("SQLPrepare(%p, \"%s\", %u) = %p", db_stmt, query, (unsigned int)len, stmt->ptr);
-		ret = SQLPrepare(db_stmt->StatementHdl, (SQLCHAR*)query, SQL_NTS);
+		ret = SQLPrepare(db_stmt->statement_hdl, (SQLCHAR*)query, SQL_NTS);
 		if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO)
 		{
-			return get_odbc_error_info(SQL_HANDLE_STMT, db_stmt->StatementHdl, "SQLPrepare");
+			return get_odbc_error_info(SQL_HANDLE_STMT, db_stmt->statement_hdl, "SQLPrepare");
 		}
 
-		db_stmt->IsPrepared = 1;
+		db_stmt->is_prepared = 1;
 
 		return 0;
 	}
@@ -697,15 +697,15 @@ int SqlDriverPrepare(db_stmt_t* stmt, const char* query, size_t len)
 	return 0;
 }
 
-int SqlDriverBindParameter(db_stmt_t* stmt, db_bind_t* params, size_t len)
+int mssql_driver_parameter_bind(db_stmt_t* stmt, db_bind_t* params, size_t len)
 {
 	mssql_statement_t* pstmt;
 
-	if (g_Arguments.IsDryRun)
+	if (global_arguments.is_dry_run)
 		return 0;
 
 	mssql_connection_t* db_connection = (mssql_connection_t*)stmt->connection->ptr;
-	if (db_connection == NULL || db_connection->ConnectionHdl == SQL_NULL_HANDLE)
+	if (db_connection == NULL || db_connection->connection_hdl == SQL_NULL_HANDLE)
 		return 1;
 
 	if (stmt->bound_param != NULL)
@@ -722,62 +722,62 @@ int SqlDriverBindParameter(db_stmt_t* stmt, db_bind_t* params, size_t len)
 		return 0;
 
 	pstmt = stmt->ptr;
-	pstmt->ParameterTypes = malloc(len * sizeof(mssql_parameter_t));
-	if (pstmt->ParameterTypes == NULL)
+	pstmt->parameter_types = malloc(len * sizeof(mssql_parameter_t));
+	if (pstmt->parameter_types == NULL)
 		return 1;
 
-	pstmt->ParameterValues = (char**)calloc(len, sizeof(char*));
-	if (pstmt->ParameterValues == NULL)
+	pstmt->parameter_values = (char**)calloc(len, sizeof(char*));
+	if (pstmt->parameter_values == NULL)
 		return 1;
 
 	/* Allocate buffers for bind parameters */
 	for (SQLSMALLINT i = 0; i < len; i++)
 	{
-		if (pstmt->ParameterValues[i] != NULL)
+		if (pstmt->parameter_values[i] != NULL)
 		{
-			free(pstmt->ParameterValues[i]);
+			free(pstmt->parameter_values[i]);
 		}
 
-		pstmt->ParameterValues[i] = (char*)malloc(MAX_PARAM_LENGTH);
-		if (pstmt->ParameterValues[i] == NULL)
+		pstmt->parameter_values[i] = (char*)malloc(MAX_PARAM_LENGTH);
+		if (pstmt->parameter_values[i] == NULL)
 			return 1;
 	}
 
 	/* Convert sysbench data types to PgSQL ones */
 	for (SQLSMALLINT i = 0; i < (SQLSMALLINT)len; i++)
 	{
-		for (i = 0; db_mssql_bind_map[i].DbType != DB_TYPE_NONE; i++)
+		for (i = 0; db_mssql_bind_map[i].db_type != DB_TYPE_NONE; i++)
 		{
-			if (db_mssql_bind_map[i].DbType == params[i].type)
+			if (db_mssql_bind_map[i].db_type == params[i].type)
 			{
-				pstmt->ParameterTypes[i].ParameterType = db_mssql_bind_map[i].ParameterType;
-				pstmt->ParameterTypes[i].ValueType = db_mssql_bind_map[i].ValueType;
+				pstmt->parameter_types[i].parameter_type = db_mssql_bind_map[i].parameter_type;
+				pstmt->parameter_types[i].value_type = db_mssql_bind_map[i].value_type;
 
 				break;
 			}
 		}
 
-		SQLRETURN ret = SQLBindParameter(pstmt->StatementHdl,
+		SQLRETURN ret = SQLBindParameter(pstmt->statement_hdl,
 										 i /* parameter number */,
-										 pstmt->ParameterTypes[i].InputOutputType,
-										 pstmt->ParameterTypes[i].ValueType,
-										 pstmt->ParameterTypes[i].ParameterType,
-										 pstmt->ParameterTypes[i].ColumnLength,
+										 pstmt->parameter_types[i].input_output_type,
+										 pstmt->parameter_types[i].value_type,
+										 pstmt->parameter_types[i].parameter_type,
+										 pstmt->parameter_types[i].column_length,
 										 0,
-										 pstmt->ParameterValues[i],
+										 pstmt->parameter_values[i],
 										 0,
 										 NULL);
 
 		if (ret != SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO)
 		{
-			return get_odbc_error_info(SQL_HANDLE_STMT, pstmt->StatementHdl, "SQLBindParameter");
+			return get_odbc_error_info(SQL_HANDLE_STMT, pstmt->statement_hdl, "SQLBindParameter");
 		}
 	}
 
 	return 0;
 }
 
-int SqlDriverBindResult(db_stmt_t* stmt, db_bind_t* params, size_t len)
+int mssql_driver_bind_result(db_stmt_t* stmt, db_bind_t* params, size_t len)
 {
 	/* NYI */
 
@@ -788,7 +788,7 @@ int SqlDriverBindResult(db_stmt_t* stmt, db_bind_t* params, size_t len)
 	return 1;
 }
 
-db_error_t SqlDriverExecute(db_stmt_t* stmt, db_result_t* rs)
+db_error_t mssql_driver_execute(db_stmt_t* stmt, db_result_t* rs)
 {
 	db_conn_t* conn = stmt->connection;
 	mssql_connection_t* pmssqlConnection = stmt->connection->ptr;
@@ -800,7 +800,7 @@ db_error_t SqlDriverExecute(db_stmt_t* stmt, db_result_t* rs)
 	int n;
 	db_error_t error = DB_ERROR_NONE;
 
-	if (g_Arguments.IsDryRun)
+	if (global_arguments.is_dry_run)
 		return DB_ERROR_NONE;
 
 	conn->sql_errmsg = NULL;
@@ -816,7 +816,7 @@ db_error_t SqlDriverExecute(db_stmt_t* stmt, db_result_t* rs)
 		}
 		pstmt = stmt->ptr;
 
-		SQLRETURN ret = SQLExecute(pstmt->StatementHdl);
+		SQLRETURN ret = SQLExecute(pstmt->statement_hdl);
 		if (ret != SQL_SUCCESS)
 		{
 			error = get_odbc_error(conn, pstmt, "SQLExecute", stmt->query, &rs->counter);
@@ -857,7 +857,7 @@ db_error_t SqlDriverExecute(db_stmt_t* stmt, db_result_t* rs)
 		buf[j] = '\0';
 
 		HSTMT hstmt = SQL_NULL_HANDLE;
-		SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, pmssqlConnection->ConnectionHdl, &hstmt);
+		SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, pmssqlConnection->connection_hdl, &hstmt);
 		if (ret != SQL_SUCCESS)
 		{
 			error = get_odbc_error(pmssqlConnection, NULL, "SQLAllocHandle", buf, NULL);
@@ -882,19 +882,19 @@ exit:
 	return error;
 }
 
-int SqlDriverFetch(db_result_t* result)
+int mssql_driver_fetch(db_result_t* result)
 {
 	return 0;
 }
 
-int SqlDriverFetchRow(db_result_t* result, db_row_t* row)
+int mssql_driver_fetch_row(db_result_t* result, db_row_t* row)
 {
 	return 0;
 }
 
 #define xfree(ptr) do{ if (ptr) free((void *)ptr); ptr = NULL; }while(0)
 
-db_error_t SqlDriverExecuteQuery(db_conn_t* connection, const char* query, size_t length, db_result_t* result)
+db_error_t mssql_driver_query_exec(db_conn_t* connection, const char* query, size_t length, db_result_t* result)
 {
 	mssql_connection_t* pconn = connection->ptr;
 	db_error_t rc = DB_ERROR_NONE;
@@ -906,7 +906,7 @@ db_error_t SqlDriverExecuteQuery(db_conn_t* connection, const char* query, size_
 	xfree(connection->sql_state);
 	xfree(connection->sql_errmsg);
 
-	SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, pconn->ConnectionHdl, &hstmt);
+	SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, pconn->connection_hdl, &hstmt);
 	if (ret != SQL_SUCCESS)
 	{
 		rc = get_odbc_error(connection, NULL, "SQLAllocHandle", query, NULL);
@@ -930,37 +930,22 @@ exit:
 }
 
 
-int SqlDriverFreeResults(db_result_t* result)
+int mssql_driver_results_free(db_result_t* result)
 {
 	return 0;
 }
 
-int SqlDriverClose(db_stmt_t* stmt)
+int mssql_driver_close(db_stmt_t* stmt)
 {
 	return 0;
 }
 
-int SqlDriverOnThreadDone(int thread_id)
+int mssql_driver_on_thread_done(int thread_id)
 {
 	return 0;
 }
 
-int SqlDriverFinished()
+int mssql_driver_finished()
 {
 	return 0;
 }
-
-//-----------------------------------------------------------------------------
-// Name:  get_odbc_error_info
-//
-// Description:
-//	Gets and prints ODBC error information.
-//
-// Parameters:
-//	handleType - type of handle passed to this routine
-//	handle - actual SQLHANDLE value
-//	location - location in the code where the error occurred.
-//
-// Returns:
-//	int
-//

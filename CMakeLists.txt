@@ -19,7 +19,7 @@ endif()
 project(
   sysbench
   VERSION "1.1.0"
-  LANGUAGES C)
+  LANGUAGES C CXX)
 
 # Set default build type, if none is given
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)

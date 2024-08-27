@@ -107,7 +107,7 @@ if(WITH_LIBMARIADB)
 endif()
 
 set(WITH_MYSQL
-    ON
+    OFF
     CACHE BOOL "Enable mysql support for database tests")
 if(WITH_MYSQL AND (NOT WITH_LIBMARIADB))
   find_package(MySQL REQUIRED)
